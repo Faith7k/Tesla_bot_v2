@@ -1,0 +1,11 @@
+version: '3'
+
+services:
+  tesla-bot:
+    build: .
+    container_name: tesla-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./tesla_bot.log:/app/tesla_bot.log 
