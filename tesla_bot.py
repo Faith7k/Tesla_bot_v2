@@ -60,9 +60,7 @@ def handle_calisiyor_musun(message):
 
 def get_tesla_inventory_web():
     """Tesla web sitesinden envanter bilgisi almaya çalışır"""
-    # Rastgele User-Agent seç
     user_agent = random.choice(USER_AGENTS)
-    
     headers = {
         "User-Agent": user_agent,
         "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
@@ -71,31 +69,26 @@ def get_tesla_inventory_web():
         "Pragma": "no-cache",
         "DNT": "1"
     }
-    
     try:
         logger.info("Tesla web sitesine istek gönderiliyor...")
-        # İstek yapmadan önce kısa bir rastgele bekleme (0-2 saniye)
         time.sleep(random.uniform(0, 2))
         response = requests.get(TESLA_INVENTORY_WEB_URL, headers=headers, timeout=30)
         response.raise_for_status()
-        
-        # Sayfada "Aradığınız Tesla'yı göremiyor musunuz?" yazısı var mı kontrol et
         if "Aradığınız Tesla'yı göremiyor musunuz?" in response.text:
             logger.info("Tesla sitesinde araç bulunmuyor (boş envanter).")
             return {"results": []}
-        
-        # Sayfada "Model Y" geçiyor mu kontrol et (yani araç var mı?)
         if "Model Y" in response.text and "TL" in response.text:
-            # Bu çok basit bir kontrol, ancak sayfada Model Y ve TL varsa muhtemelen araç var
             logger.info("Tesla web sitesinde araç olduğu tespit edildi!")
-            # Gerçek bir sayı bilmediğimiz için 1 diyoruz
             return {"results": [{"dummy": True}]}
-        
         logger.info("Tesla web sitesinde araç durumu belirlenemedi.")
         return {"results": []}
     except requests.RequestException as e:
         logger.error(f"Tesla web sitesine erişirken hata oluştu: {e}")
-        return None
+        # Hata mesajını fonksiyonla birlikte döndür
+        return None, str(e)
+    except Exception as e:
+        logger.error(f"Tesla web sitesine erişirken beklenmeyen hata oluştu: {e}")
+        return None, str(e)
 
 def format_inventory_message(results):
     """Envanter sonuçlarını okunabilir bir mesaja dönüştürür"""
@@ -148,7 +141,7 @@ def send_telegram_notification(message):
         logger.info("Telegram bildirimi başarıyla gönderildi.")
         return True
     except Exception as e:
-        logger.error(f"Telegram bildirimi gönderilirken hata oluştu: {e}")
+        logger.error(f"Telegram API hatası: {e}")
         return False
 
 def get_random_wait_time(error_occurred=False):
@@ -181,14 +174,20 @@ def main():
     previous_count = 0
     # Başarısız sorgu sayacı
     consecutive_errors = 0
+    last_error_type = None
+    last_error_detail = None
     
     while True:
         error_occurred = False
         logger.info("Envanter kontrol ediliyor...")
         # Web sitesinden kontrol et
-        inventory_data = get_tesla_inventory_web()
+        try:
+            inventory_data, tesla_error = get_tesla_inventory_web()
+        except Exception as e:
+            inventory_data = None
+            tesla_error = str(e)
         if inventory_data is not None:
-            consecutive_errors = 0  # Başarılı sorgu, sayacı sıfırla
+            consecutive_errors = 0
             current_count = len(inventory_data.get("results", []))
             # Envanter durumunu loglama
             if current_count == 0:
@@ -206,14 +205,17 @@ def main():
                 logger.info(message)
             # Güncel sayıyı sakla
             previous_count = current_count
+            last_error_type = None
+            last_error_detail = None
         else:
             error_occurred = True
             consecutive_errors += 1
-            logger.warning(f"API sorgusu başarısız oldu. Ardışık hata sayısı: {consecutive_errors}")
-            # Çok fazla ardışık hata varsa, daha uzun süre bekle
+            last_error_type = "Tesla API"
+            last_error_detail = tesla_error
+            logger.warning(f"Tesla API sorgusu başarısız oldu. Ardışık hata sayısı: {consecutive_errors}. Hata: {tesla_error}")
             if consecutive_errors >= 3:
-                error_occurred = True  # Daha uzun bekleme süresi için
-                message = f"⚠️ Bot ardışık {consecutive_errors} kez API hatasıyla karşılaştı. Daha uzun süre beklenecek."
+                error_occurred = True
+                message = f"⚠️ Bot ardışık {consecutive_errors} kez *{last_error_type}* hatasıyla karşılaştı.\nHata Detayı: {last_error_detail}\nDaha uzun süre beklenecek."
                 send_telegram_notification(message)
         # Rastgele bekleme süresi belirle
         wait_seconds, wait_minutes = get_random_wait_time(error_occurred)
